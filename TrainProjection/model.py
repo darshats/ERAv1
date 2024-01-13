@@ -30,7 +30,8 @@ class PhiWrapper(nn.Module):
         self.input_dim_phi2 = 2560
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False, device='cuda')
         # self.clip_model, self.preprocess = clip.load("ViT-B/16", device='cuda')
-        self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32', device='cuda')
+        self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
+        self.clip_model.to(device='cuda')
         self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
 
