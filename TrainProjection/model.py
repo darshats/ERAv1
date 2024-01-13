@@ -4,7 +4,7 @@ from PIL import Image
 import torch
 from torch import nn
 from torchvision.transforms import v2
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor
 from torchinfo import summary
 import clip
 
@@ -12,18 +12,26 @@ class PhiWrapper(nn.Module):
     def __init__(self):
         super().__init__()
         ## need to pip install flash_attn
-        # self.frozen_phi = AutoModelForCausalLM.from_pretrained("microsoft/phi-2", torch_dtype=torch.float16, trust_remote_code=True)
-        # self.frozen_phi = self.frozen_phi.to('cuda')
-        # self.phi_tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-2", trust_remote_code=True, torch_dtype=torch.float16)
+        self.frozen_phi = AutoModelForCausalLM.from_pretrained(
+            "microsoft/phi-2", 
+            torch_dtype=torch.float16, 
+            trust_remote_code=True)
+        self.frozen_phi.to(device='cuda')
+        self.phi_tokenizer = AutoTokenizer.from_pretrained(
+            "microsoft/phi-2", 
+            trust_remote_code=True, 
+            torch_dtype=torch.float16
+            )
 
-        # for name, param in self.frozen_phi.named_parameters():
-        #     param.requires_grad = False
+        for name, param in self.frozen_phi.named_parameters():
+            param.requires_grad = False
 
-        # self.input_dim_CLIP = 768
-        # self.input_dim_phi2 = 2560
-        # self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
-
-        self.clip_model, self.preprocess = clip.load("ViT-B/32", device='cuda')
+        self.input_dim_CLIP = 768
+        self.input_dim_phi2 = 2560
+        self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False, device='cuda')
+        # self.clip_model, self.preprocess = clip.load("ViT-B/16", device='cuda')
+        self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32', device='cuda')
+        self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
 
     def forward(self, text_inputs=None, image_inputs:Image=None):
@@ -34,11 +42,11 @@ class PhiWrapper(nn.Module):
                 return text
         
         if image_inputs is not None:
-            img_t = self.preprocess(image_inputs).unsqueeze(0).to(device='cuda')
+            img_inputs = self.clip_processor(images=image_inputs, return_tensors='pt')
             with torch.no_grad():
-                ## image_features.shape == (1, 512) ???
-                image_features = self.clip_model.encode_image(img_t)
+                image_features = self.clip_model(**img_inputs, output_hidden_states=True)
                 image_proj = self.projection_img(image_features)
+                ##TODO add Shashank's layer here
                 outputs = self.frozen_phi.generate(inputs_embeds=image_proj, max_length=200)
                 ## this might be garbage as input embedding is not what phi2 might have seen
                 text = self.phi_tokenizer.batch_decode(outputs)[0]
