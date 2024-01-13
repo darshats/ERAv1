@@ -22,8 +22,32 @@ if __name__ == "__main__":
     phi = PhiWrapper()
 
     ## this is all fake, just to see what tokenizer and summary emit about the model
-    ## currently running into environment issues with transformers TODO 
     summary(phi.frozen_phi)
-    inputs = phi.phi_tokenizer('hi model, whats up?', return_tensors="pt", return_attention_mask=False).to('cuda')
+    prompt = 'hi model, whats up?'
+    inputs = phi.phi_tokenizer(f'Instruct: {prompt}\nOutput:', return_tensors="pt", return_attention_mask=False).to('cuda')
     text = phi(inputs)
+
+
+    '''
+    phi2 fwd method inputs:
+     def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+
+    either we can pass input_ids (b,n) from phi2-tokenizer or we can pass inputs_embeds (b,n,2560)
+    position ids can be None, then its set to torch.arange(n)
+    attention_mask can be None, its computed inside to be triangular matrix with lower triangle=0 and upper triangle=-65504
+
+    32 decoder layers!
+    '''
+
     print(text)
