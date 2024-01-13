@@ -22,5 +22,5 @@ if __name__ == "__main__":
     ## this is all fake, just to see what tokenizer and summary emit about the model
     ## currently running into environment issues with transformers TODO 
     summary(phi.frozen_phi)
-    inputs = phi.tokenizer('hi model, whats up?', return_tensors="pt", return_attention_mask=False)
+    inputs = phi.phi_tokenizer('hi model, whats up?', return_tensors="pt", return_attention_mask=False)
     text = phi(inputs)
