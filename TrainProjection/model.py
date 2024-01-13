@@ -29,7 +29,7 @@ class PhiWrapper(nn.Module):
     def forward(self, text_inputs=None, image_inputs:Image=None):
         if text_inputs is not None:
             with torch.no_grad():
-                outputs = self.frozen_phi.generate(**inputs, max_length=200)
+                outputs = self.frozen_phi.generate(**text_inputs, max_length=200)
                 text = self.phi_tokenizer.batch_decode(outputs)[0]
                 return text
         
