@@ -1,10 +1,11 @@
 import os
 from PIL import Image
+import numpy as np
 
 import torch
 from torch import nn
 from torchvision.transforms import v2
-from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor, AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor, AutoConfig, GenerationMixin
 from torchinfo import summary
 import clip
 
@@ -40,7 +41,7 @@ class PhiWrapper(nn.Module):
             eos_token_id=self.phi_tokenizer.eos_token_id,
             trust_remote_code=True
         )
-        self.frozen_phi = AutoModelForCausalLM.from_config(
+        self.frozen_phi:GenerationMixin = AutoModelForCausalLM.from_config(
             config, 
             # torch_dtype=torch.float16, 
             trust_remote_code=True)
@@ -79,13 +80,29 @@ class PhiWrapper(nn.Module):
             img_inputs.to(device='cuda')
             with torch.no_grad():
                 image_features = self.clip_model(**img_inputs, output_hidden_states=True)
-
-                image_features = self.projection_img(image_features.last_hidden_state)
+                ## skip cls token
+                image_features = image_features.last_hidden_state[:, 1:]
+                image_features = self.projection_img(image_features)
                 image_features = self.resblock(image_features)
-                ## use generate() for one by one outputs??
-                outputs = self.frozen_phi(inputs_embeds=image_features)
+
+                outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1)
+
+                ## TODO to use this code the input_length should be max_new_tokens perhaps
+                # outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
+                # transition_scores = self.frozen_phi.compute_transition_scores(outputs.sequences, outputs.scores, normalize_logits=True)
+                # input_length = 1 if self.frozen_phi.config.is_encoder_decoder else inputs.input_ids.shape[1]
+                # generated_tokens = outputs.sequences[:, input_length:]
+                # for tok, score in zip(generated_tokens[0], transition_scores[0]):
+                #     # | token | token string | logits | probability
+                #     print(f"| {tok:5d} | {self.phi_tokenizer.decode(tok):8s} | {score.numpy():.3f} | {np.exp(score.numpy()):.2%}")
+
+
                 ## this might be garbage as input embedding is not what phi2 might have seen
+                
                 text = self.phi_tokenizer.batch_decode(outputs)[0]
+
+                ## now we need to append this output back into image_features and loop
+
                 return text
             
 
@@ -94,7 +111,7 @@ if __name__ == "__main__":
 
     ## this is all fake, just to see what tokenizer and summary emit about the model
     # summary(phi.frozen_phi)
-    # prompt = 'hi model, whats up?'
+    # prompt = 'hi, tell me how are you'
     # inputs = phi.phi_tokenizer(f'Instruct: {prompt}\nOutput:', return_tensors="pt", return_attention_mask=False).to('cuda')
     # text = phi(text_inputs=inputs)
     # print(text)
