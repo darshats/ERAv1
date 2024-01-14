@@ -85,23 +85,27 @@ class PhiWrapper(nn.Module):
                 image_features = self.projection_img(image_features)
                 image_features = self.resblock(image_features)
 
-                outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1)
+                while (1):
 
-                ## TODO to use this code the input_length should be max_new_tokens perhaps
-                # outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
-                # transition_scores = self.frozen_phi.compute_transition_scores(outputs.sequences, outputs.scores, normalize_logits=True)
-                # input_length = 1 if self.frozen_phi.config.is_encoder_decoder else inputs.input_ids.shape[1]
-                # generated_tokens = outputs.sequences[:, input_length:]
-                # for tok, score in zip(generated_tokens[0], transition_scores[0]):
-                #     # | token | token string | logits | probability
-                #     print(f"| {tok:5d} | {self.phi_tokenizer.decode(tok):8s} | {score.numpy():.3f} | {np.exp(score.numpy()):.2%}")
+                    outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1)
+
+                    ## TODO to use this code the input_length should be max_new_tokens perhaps
+                    # outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
+                    # transition_scores = self.frozen_phi.compute_transition_scores(outputs.sequences, outputs.scores, normalize_logits=True)
+                    # input_length = 1 if self.frozen_phi.config.is_encoder_decoder else inputs.input_ids.shape[1]
+                    # generated_tokens = outputs.sequences[:, input_length:]
+                    # for tok, score in zip(generated_tokens[0], transition_scores[0]):
+                    #     # | token | token string | logits | probability
+                    #     print(f"| {tok:5d} | {self.phi_tokenizer.decode(tok):8s} | {score.numpy():.3f} | {np.exp(score.numpy()):.2%}")
 
 
-                ## this might be garbage as input embedding is not what phi2 might have seen
-                
-                text = self.phi_tokenizer.batch_decode(outputs)[0]
-
-                ## now we need to append this output back into image_features and loop
+                    ## this might be garbage as input embedding is not what phi2 might have seen
+                    
+                    text = self.phi_tokenizer.batch_decode(outputs)[0]
+                    print(text)
+                    new_embeds = self.self.frozen_phi.model.embed_tokens(outputs)
+                    ## now we need to append this output back into image_features and loop
+                    image_features = torch.cat((image_features, new_embeds), dim=1)
 
                 return text
             
