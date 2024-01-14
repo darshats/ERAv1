@@ -4,24 +4,53 @@ from PIL import Image
 import torch
 from torch import nn
 from torchvision.transforms import v2
-from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor, AutoConfig
 from torchinfo import summary
 import clip
+
+class SimpleResBlock(nn.Module):
+    def __init__(self, input_size):
+        super().__init__()
+        self.pre_norm = nn.LayerNorm(input_size)
+        self.proj = nn.Sequential(
+            nn.Linear(input_size, input_size),
+            nn.GELU(),
+            nn.Linear(input_size, input_size)
+        )
+    def forward(self, x):
+        x = self.pre_norm(x)
+        return x + self.proj(x)
+    
 
 class PhiWrapper(nn.Module):
     def __init__(self):
         super().__init__()
-        ## need to pip install flash_attn
-        self.frozen_phi = AutoModelForCausalLM.from_pretrained(
-            "microsoft/phi-2", 
-            torch_dtype=torch.float16, 
-            trust_remote_code=True)
-        self.frozen_phi.to(device='cuda')
+
         self.phi_tokenizer = AutoTokenizer.from_pretrained(
             "microsoft/phi-2", 
             trust_remote_code=True, 
-            torch_dtype=torch.float16
+            # torch_dtype=torch.float16
             )
+        
+        self.phi_tokenizer.pad_token = self.phi_tokenizer.eos_token
+        config = AutoConfig.from_pretrained(
+            'microsoft/phi-2',
+            vocab_size=len(self.phi_tokenizer),
+            bos_token_id=self.phi_tokenizer.bos_token_id,
+            eos_token_id=self.phi_tokenizer.eos_token_id,
+            trust_remote_code=True
+        )
+        self.frozen_phi = AutoModelForCausalLM.from_config(
+            config, 
+            # torch_dtype=torch.float16, 
+            trust_remote_code=True)
+
+        # self.frozen_phi = AutoModelForCausalLM.from_pretrained(
+        #     "microsoft/phi-2", 
+        #     torch_dtype=torch.float16, 
+        #     trust_remote_code=True)
+        self.frozen_phi.to(device='cuda')
+        
 
         for name, param in self.frozen_phi.named_parameters():
             param.requires_grad = False
@@ -29,6 +58,8 @@ class PhiWrapper(nn.Module):
         self.input_dim_CLIP = 768
         self.input_dim_phi2 = 2560
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False, device='cuda')
+        self.resblock = SimpleResBlock(self.input_dim_phi2)
+        self.resblock.to(device='cuda')
         # self.clip_model, self.preprocess = clip.load("ViT-B/16", device='cuda')
         self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
         self.clip_model.to(device='cuda')
@@ -43,12 +74,16 @@ class PhiWrapper(nn.Module):
                 return text
         
         if image_inputs is not None:
+            # img_inputs = self.clip_processor(images=image_inputs, return_tensors='pt', do_resize=False, do_center_crop=False, size={"shortest_edge": 512})
             img_inputs = self.clip_processor(images=image_inputs, return_tensors='pt')
+            img_inputs.to(device='cuda')
             with torch.no_grad():
                 image_features = self.clip_model(**img_inputs, output_hidden_states=True)
-                image_proj = self.projection_img(image_features)
-                ##TODO add Shashank's layer here
-                outputs = self.frozen_phi.generate(inputs_embeds=image_proj, max_length=200)
+
+                image_features = self.projection_img(image_features.last_hidden_state)
+                image_features = self.resblock(image_features)
+                ## use generate() for one by one outputs??
+                outputs = self.frozen_phi(inputs_embeds=image_features)
                 ## this might be garbage as input embedding is not what phi2 might have seen
                 text = self.phi_tokenizer.batch_decode(outputs)[0]
                 return text
