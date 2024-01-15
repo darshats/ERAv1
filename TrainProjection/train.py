@@ -2,6 +2,7 @@ import os
 from PIL import Image
 import numpy as np
 import pandas as pd
+import wandb
 
 import torch
 import torch.nn.functional as F
@@ -20,13 +21,16 @@ def file_exists(image_id, fpath = './embeddings'):
     else: 
         return False
 
-if __name__ == 'main':
-    device = 'cuda'
+if __name__ == "__main__":
+
+    
+    wandb.login()
+    wandb.init(project="Capstone, part 1", dir='./tmp', id='v1')
+
     ## get tokenizer and model ready
     max_token_len_data = 75
     wrapper = PhiWrapper(max_token_len_data)
     tokenizer = wrapper.phi_tokenizer
-
 
     ## get data ready
     captions_info_df = pd.read_csv('TrainProjection/captions_images_map_COCO_train2017.csv')
@@ -40,8 +44,8 @@ if __name__ == 'main':
         max_token_len_data
         )
 
-    batch_size_train = 60 
-    train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True)
+    batch_size_train = 3
+    train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True, generator = torch.Generator(device='cuda'))
     num_batches_train_on = 1500    
     num_batches_train_on, len(train_dataloader)
 
@@ -53,61 +57,37 @@ if __name__ == 'main':
     N_batches = len(train_dataloader)
                     
     for epoch in range(num_epochs):
-
-        print(f"Working on epoch {epoch}")
-        for iteration, x, gt in enumerate(train_dataloader):
+        print(f"Epoch: {epoch}")
+        epoch_loss = 0
+        for iteration, (x, gt) in enumerate(train_dataloader):
             if iteration == num_batches_train_on: 
                 break 
 
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
             optimizer.zero_grad()
             
-            ## gt is of form <input caption tokenized><eos>
-            ## input is clip image embed
-            ## pass through wrapper, get next output token
-            output = wrapper(x)
-            ## compare loss against next output token
-
-            ## feature force
-
-            output = wrapper(input.to(device))
-
-            ## need to map gt token_ids to one-hot enocding vocab_size
-            gt_one_hot = torch.nn.functional.one_hot(gt, vocab_size).to(torch.float32)
-
-            ## output in correct shape
-            output_tensor_new = torch.empty(batch_size_train, max_token_len_data, vocab_size)
-            for idx, s in enumerate(output.scores): 
-                output_tensor_new[:, idx, :] = s
-            
-            output_tensor_new = F.softmax(output_tensor_new, dim=-1)
-            
-            ## ce loss between output_tensor_new and gt_one_hot
-            loss = F.cross_entropy(output_tensor_new.view(-1, vocab_size), gt.view(-1))
-
+            ## gt is of form (batch, input caption tokenized and padded)
+            ## x is clip image embed (batch, 49, 768)
+            ## pass through wrapper, get loss from greedy strategy
+            loss, word_output_pred_tokens = wrapper(x, gt)
             loss.requires_grad = True
             loss.backward()
 
             optimizer.step() 
             # optimizer.zero_grad(set_to_none=True) 
+            epoch_loss += loss.item()
 
-            if (iteration % 100) == 0: 
-                print("")
+            if (iteration % 50) == 0: 
+                print(f'Iteration: {iteration}, Loss: {loss.item()}')
+                wandb.log({"loss": loss.item()})
 
-                ## print gt and output decoded tokens for visual inspection for the 1st el of batch
-                gt_input_ids = gt[0]
-                output_input_ids = torch.argmax(output_tensor_new[0], dim=1)
-                output_sequences_input_ids = output.sequences[0, :]
+                num_rows = gt.shape[0]
+                batch_preds = word_output_pred_tokens.int()
+                for i in range(num_rows):
+                    gt_text = tokenizer.decode(gt[i])
+                    pred_text = tokenizer.decode(batch_preds[i])
+                print(f"Batch data {i}: \nCaption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
 
-                gt_idx_0_decoded = tokenizer.decode(gt_input_ids).replace('<|endoftext|>', '')
-                output_idx_0_decoded = tokenizer.decode(output_input_ids).replace('<|endoftext|>', '')
-                output_sequences_idx_0_decoded = tokenizer.decode(output_sequences_input_ids).replace('<|endoftext|>', '')
-
-                # print(f"Loss: {loss}\nInput_ids (gt): {gt_input_ids}\nInput_ids (pred): {output_input_ids}\nInput_ids (sequence): {output_sequences_input_ids}")
-                ## print loss 
-                print(f"Loss: {loss}\nCaption (gt): {gt_idx_0_decoded}\nCaption (pred): {output_idx_0_decoded}\nCaption (sequence): {output_sequences_idx_0_decoded}")
-    
-            
-        print("")
+        avg_loss = epoch_loss/(iteration+1) 
+        wandb.log({"epoch loss": avg_loss})
         print(f"Epoch {epoch} finished")
-        print("")

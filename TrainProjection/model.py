@@ -48,29 +48,32 @@ class PhiWrapper(nn.Module):
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
         self.resblock = SimpleResBlock(self.input_dim_phi2)
         self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
+        for name, param in self.clip_model.named_parameters():
+            param.requires_grad = False
         self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
-            torch.tensor(self.phi_tokenizer.bos_token_id).to(self.device)).unsqueeze(0)
+            torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
 
         instruct_part1 = self.phi_tokenizer('Instruction:Caption this image:', return_tensors='pt')
         self.instruct_part1_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part1.input_ids.to(device='cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer('Answer:')
+        instruct_part2 = self.phi_tokenizer('Answer:', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to(device='cuda')
             ).squeeze(0)
         
 
-    def forward(self, x, caption_embed):
+    def forward(self, x, caption_tokenized):
         x = self.projection_img(x)
         x = self.resblock(x)
         batch_size = x.shape[0]
-        max_output_len = caption_embed.shape[1]
+        max_output_len = caption_tokenized.shape[1]
+        vocab_size = 51200
 
-        ## form a vertical vector: bos | instruction part1 | image emb | instruction part2
+        ## form a vertical vector: bos | instruction part1 | image emb | instruction part2. (b, 60, 2560)
         x = torch.cat(
             (
                 self.bos_embedding.repeat(batch_size, 1, 1), 
@@ -82,40 +85,43 @@ class PhiWrapper(nn.Module):
         )
 
         loss = 0
-        word_output_pred_tokens = torch.empty((batch_size), max_output_len)
+        word_output_pred_tokens = torch.empty(batch_size, max_output_len)
         ## greedy loop, get output one token at a time
         for idx in range(max_output_len):
-            next_word = self.frozen_phi.generate(
+            pred_word = self.frozen_phi.generate(
                 inputs_embeds=x,
                 max_new_tokens = 1, 
                 output_scores=True, 
                 return_dict_in_generate = True, 
-                pad_token_id=self.tokenizer.pad_token_id, 
-                bos_token_id=self.tokenizer.bos_token_id, 
-                eos_token_id=self.tokenizer.eos_token_id
+                pad_token_id=self.phi_tokenizer.pad_token_id, 
+                bos_token_id=self.phi_tokenizer.bos_token_id, 
+                eos_token_id=self.phi_tokenizer.eos_token_id
             )
+            pred_word_probs = F.softmax(pred_word.scores[0], dim=-1)
+            word_output_pred_tokens[:, idx] = pred_word.sequences[:, 1]
+            vocab_size = pred_word.scores[0].shape[1]
+
             ## get the GT across batch at the idx th position of output
-            caption_word_token = caption_embed[:,idx]
-            if sum(torch.eq(torch.tensor([self.tokenizer.pad_token_id]*batch_size), caption_word_token)) == torch.tensor(batch_size): 
+            gt_word_token = caption_tokenized[:,idx]
+            # gt_word_one_hot = torch.nn.functional.one_hot(gt_word_token, vocab_size).to(torch.float32)
+            if sum(torch.eq(torch.tensor([self.phi_tokenizer.pad_token_id]*batch_size), gt_word_token)) == torch.tensor(batch_size): 
                 break 
-
-            caption_word_embedding = self.frozen_phi.get_input_embeddings()(
-                caption_word_token.to(device='cuda')
-                ).unsqueeze(1)
             ## feature forcing!, send in next GT to help generation along right track
-            x = torch.cat((x, caption_word_embedding), dim=1)
+            ## to stop feature forcing, use embedding of pred_word.sequences[:, 1] instead of gt_word_token
+            gt_word_embedding = self.frozen_phi.get_input_embeddings()(gt_word_token).unsqueeze(1)
+            x = torch.cat((x, gt_word_embedding), dim=1)
 
-            loss += F.cross_entropy(
-                next_word.scores[0], 
-                caption_word_token.to(device='cuda'), 
-                ignore_index=self.tokenizer.pad_token_id, 
+            loss_at_idx = F.cross_entropy(
+                pred_word_probs, 
+                gt_word_token, 
+                ignore_index=self.phi_tokenizer.pad_token_id, 
                 label_smoothing=0.1
                 )
+            loss += loss_at_idx
+            # print(f'loss at index {idx}: {loss_at_idx}')
+            # loss_tosend = loss/batch_size
 
-            word_output_pred_tokens[:, idx] = next_word.sequences[:, 1]
-
-            loss_tosend = loss/batch_size
-        return loss_tosend, word_output_pred_tokens
+        return loss, word_output_pred_tokens
 
     def create_attn_mask(self, image_embeds:torch.Tensor, batch_captions:list):
         ## image features is 49,2560
