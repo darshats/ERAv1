@@ -12,7 +12,7 @@ from model import PhiWrapper
 
 torch.set_default_device("cuda")
 
-def file_exists(image_id, fpath = '/media/App/amaranth/lavanya/Capstone_data/clip_features_base_patch32/'): 
+def file_exists(image_id, fpath = './embeddings'): 
     n = '0'*(12-len(str(image_id))) + str(image_id) + '.h5'
     fp = os.path.join(fpath, n)
     if os.path.exists(fp): 
@@ -23,7 +23,8 @@ def file_exists(image_id, fpath = '/media/App/amaranth/lavanya/Capstone_data/cli
 if __name__ == 'main':
     device = 'cuda'
     ## get tokenizer and model ready
-    wrapper = PhiWrapper()
+    max_token_len_data = 75
+    wrapper = PhiWrapper(max_token_len_data)
     tokenizer = wrapper.phi_tokenizer
 
 
@@ -31,10 +32,10 @@ if __name__ == 'main':
     captions_info_df = pd.read_csv('TrainProjection/captions_images_map_COCO_train2017.csv')
     captions_info_df_subset = captions_info_df.drop_duplicates(subset='image_id', keep='first')
     captions_info_df_subset['image_embed_exists'] = captions_info_df_subset['image_id'].apply(lambda x: file_exists(x))
-    max_token_len_data = 75
+    
     dataset = COCO_CLIP_Dataset(
         captions_info_df_subset, 
-        '/media/App/amaranth/lavanya/Capstone_data/clip_features_base_patch32/', 
+        'embeddings', 
         tokenizer, 
         max_token_len_data
         )
@@ -46,7 +47,7 @@ if __name__ == 'main':
 
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=1e-5, eps=1e-9) 
     num_epochs = 10
-    vocab_size = 50295
+    vocab_size = 51200
 
     wrapper.train()
     N_batches = len(train_dataloader)
@@ -54,14 +55,21 @@ if __name__ == 'main':
     for epoch in range(num_epochs):
 
         print(f"Working on epoch {epoch}")
-        for iteration, batch in enumerate(train_dataloader):
+        for iteration, x, gt in enumerate(train_dataloader):
             if iteration == num_batches_train_on: 
                 break 
 
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
             optimizer.zero_grad()
-            input = batch[0]
-            gt = batch[1] 
+            
+            ## gt is of form <input caption tokenized><eos>
+            ## input is clip image embed
+            ## pass through wrapper, get next output token
+            output = wrapper(x)
+            ## compare loss against next output token
+
+            ## feature force
+
             output = wrapper(input.to(device))
 
             ## need to map gt token_ids to one-hot enocding vocab_size
