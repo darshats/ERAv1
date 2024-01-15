@@ -83,44 +83,44 @@ class PhiWrapper(nn.Module):
             return text
             
 
-if __name__ == "__main__":
-    wrapper = PhiWrapper()
+# if __name__ == "__main__":
+wrapper = PhiWrapper()
 
-    ## this is all fake, just to see what tokenizer and summary emit about the model
-    # summary(phi.frozen_phi)
-    prompt = 'Summarize this: an apple is very healthy fruit. Eating an apple keeps on healthy. No need for a doctor. We will not fall sick'
-    # prompt = phi.phi_tokenizer(f'Instruct: {prompt}\nOutput:', return_tensors="pt", return_attention_mask=False).to('cuda')
-    prompt = wrapper.phi_tokenizer(prompt, return_tensors='pt', return_attention_mask=False)
-    with torch.no_grad():
-        outputs = wrapper.frozen_phi.generate(**prompt, max_length=50)
-        text = wrapper.phi_tokenizer.batch_decode(outputs)[0]
-        print(text)
-
-    ## Image input part
-    '''
-    phi2 fwd method inputs:
-     def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-
-    either we can pass input_ids (b,n) from phi2-tokenizer or we can pass inputs_embeds (b,n,2560)
-    position ids can be None, then its set to torch.arange(n)
-    attention_mask can be None, its computed inside to be triangular matrix with lower triangle=0 and upper triangle=-65504
-    32 decoder layers!
-    '''
-    img_pil = Image.open('TrainProjection/balloons.png')
-    caption = 'painting of a woman in a purple dress walking in a field with hot air balloons'
-    img_pil = img_pil.resize((512,512), resample=Image.LANCZOS)
-    text = wrapper(image_inputs=img_pil)
+## this is all fake, just to see what tokenizer and summary emit about the model
+# summary(phi.frozen_phi)
+prompt = 'Summarize this: an apple is very healthy fruit. Eating an apple keeps on healthy. No need for a doctor. We will not fall sick'
+# prompt = phi.phi_tokenizer(f'Instruct: {prompt}\nOutput:', return_tensors="pt", return_attention_mask=False).to('cuda')
+prompt = wrapper.phi_tokenizer(prompt, return_tensors='pt', return_attention_mask=False)
+with torch.no_grad():
+    outputs = wrapper.frozen_phi.generate(**prompt, max_length=50)
+    text = wrapper.phi_tokenizer.batch_decode(outputs)[0]
     print(text)
 
-     
+## Image input part
+'''
+phi2 fwd method inputs:
+    def forward(
+    self,
+    input_ids: torch.LongTensor = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[List[torch.FloatTensor]] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+) -> Union[Tuple, BaseModelOutputWithPast]:
+
+either we can pass input_ids (b,n) from phi2-tokenizer or we can pass inputs_embeds (b,n,2560)
+position ids can be None, then its set to torch.arange(n)
+attention_mask can be None, its computed inside to be triangular matrix with lower triangle=0 and upper triangle=-65504
+32 decoder layers!
+'''
+img_pil = Image.open('TrainProjection/balloons.png')
+caption = 'painting of a woman in a purple dress walking in a field with hot air balloons'
+img_pil = img_pil.resize((512,512), resample=Image.LANCZOS)
+text = wrapper(image_inputs=img_pil)
+print(text)
+
+    
