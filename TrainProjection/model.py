@@ -47,10 +47,11 @@ class PhiWrapper(nn.Module):
         self.input_dim_phi2 = input_dim_phi2
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
         self.resblock = SimpleResBlock(self.input_dim_phi2)
-        self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
-        for name, param in self.clip_model.named_parameters():
-            param.requires_grad = False
-        self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
+        ## uncomment below for standalone testing with a PIL and caption
+        # self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
+        # for name, param in self.clip_model.named_parameters():
+        #     param.requires_grad = False
+        # self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
@@ -85,7 +86,7 @@ class PhiWrapper(nn.Module):
         )
 
         loss = 0
-        word_output_pred_tokens = torch.empty(batch_size, max_output_len)
+        word_output_pred_tokens = torch.zeros((batch_size, max_output_len), dtype=torch.int32)
         ## greedy loop, get output one token at a time
         for idx in range(max_output_len):
             pred_word = self.frozen_phi.generate(
