@@ -9,6 +9,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, A
 from torchinfo import summary
 import clip
 
+torch.set_default_device("cuda")
+
 class SimpleResBlock(nn.Module):
     def __init__(self, input_size):
         super().__init__()
@@ -27,40 +29,28 @@ class PhiWrapper(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.phi_tokenizer = AutoTokenizer.from_pretrained(
-            "microsoft/phi-2", 
-            trust_remote_code=True, 
-            )
+        PHI = 'microsoft/phi-2'
+        self.phi_tokenizer = AutoTokenizer.from_pretrained(PHI, trust_remote_code=True)
         self.phi_tokenizer.pad_token = self.phi_tokenizer.eos_token
 
-        config = AutoConfig.from_pretrained(
-            'microsoft/phi-2',
-            vocab_size=len(self.phi_tokenizer),
-            bos_token_id=self.phi_tokenizer.bos_token_id,
-            eos_token_id=self.phi_tokenizer.eos_token_id,
-            trust_remote_code=True
-        )
-        self.frozen_phi:GenerationMixin = AutoModelForCausalLM.from_config(
-            config, 
-            trust_remote_code=True)
-        self.frozen_phi.to(device='cuda')
+        self.frozen_phi:GenerationMixin = AutoModelForCausalLM.from_pretrained(PHI, trust_remote_code=True)
+        self.frozen_phi.config.eos_token_id = self.phi_tokenizer.eos_token_id
+        self.frozen_phi.config.bos_token_id = self.phi_tokenizer.bos_token_id
+        ## Setting `pad_token_id` to `eos_token_id`:50256 for open-end generation.
         for name, param in self.frozen_phi.named_parameters():
             param.requires_grad = False
 
         self.input_dim_CLIP = 768
         self.input_dim_phi2 = 2560
-        self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False, device='cuda')
+        self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
         self.resblock = SimpleResBlock(self.input_dim_phi2)
-        self.resblock.to(device='cuda')
         self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
-        self.clip_model.to(device='cuda')
         self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
 
     def forward(self, image_inputs:Image=None):
         # img_inputs = self.clip_processor(images=image_inputs, return_tensors='pt', do_resize=False, do_center_crop=False, size={"shortest_edge": 512})
         img_inputs = self.clip_processor(images=image_inputs, return_tensors='pt')
-        img_inputs.to(device='cuda')
         with torch.no_grad():
             image_features = self.clip_model(**img_inputs, output_hidden_states=True)
             ## skip cls token
@@ -69,7 +59,6 @@ class PhiWrapper(nn.Module):
             image_features = self.resblock(image_features)
 
             while (1):
-
                 outputs = self.frozen_phi.generate(inputs_embeds=image_features, max_new_tokens=1)
 
                 ## TODO to use this code the input_length should be max_new_tokens perhaps
@@ -80,7 +69,6 @@ class PhiWrapper(nn.Module):
                 # for tok, score in zip(generated_tokens[0], transition_scores[0]):
                 #     # | token | token string | logits | probability
                 #     print(f"| {tok:5d} | {self.phi_tokenizer.decode(tok):8s} | {score.numpy():.3f} | {np.exp(score.numpy()):.2%}")
-
 
                 ## this might be garbage as input embedding is not what phi2 might have seen
                 
@@ -100,9 +88,9 @@ if __name__ == "__main__":
 
     ## this is all fake, just to see what tokenizer and summary emit about the model
     # summary(phi.frozen_phi)
-    prompt = 'what color is an apple?'
+    prompt = 'Summarize this: an apple is very healthy fruit. Eating an apple keeps on healthy. No need for a doctor. We will not fall sick'
     # prompt = phi.phi_tokenizer(f'Instruct: {prompt}\nOutput:', return_tensors="pt", return_attention_mask=False).to('cuda')
-    prompt = wrapper.phi_tokenizer(prompt, return_tensors='pt').to('cuda')
+    prompt = wrapper.phi_tokenizer(prompt, return_tensors='pt', return_attention_mask=False)
     with torch.no_grad():
         outputs = wrapper.frozen_phi.generate(**prompt, max_length=50)
         text = wrapper.phi_tokenizer.batch_decode(outputs)[0]
