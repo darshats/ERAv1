@@ -25,12 +25,14 @@ if __name__ == "__main__":
 
     
     wandb.login()
-    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v4')
+    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v5')
     ## v3 - lr=1e-5, full feature forcing
     ## v4 - lr=5e-3, full feature forcing
+    ## v5 - lr=5e-3, part feature forcing, 'summarize this:'<image>'. Answer:'
+    ## v6, same as above, no feature forcing
 
     ## get tokenizer and model ready
-    max_token_len_data = 75
+    max_token_len_data = 128
     wrapper = PhiWrapper(max_token_len_data)
     tokenizer = wrapper.phi_tokenizer
 
