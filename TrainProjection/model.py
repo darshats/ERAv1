@@ -109,7 +109,11 @@ class PhiWrapper(nn.Module):
                 break 
             ## feature forcing!, send in next GT to help generation along right track
             ## to stop feature forcing, use embedding of pred_word.sequences[:, 1] instead of gt_word_token
-            gt_word_embedding = self.frozen_phi.get_input_embeddings()(gt_word_token).unsqueeze(1)
+
+            # append_token = gt_word_token if idx<=4 else pred_word.sequences[:, 1]
+            append_token = gt_word_token
+
+            gt_word_embedding = self.frozen_phi.get_input_embeddings()(append_token).unsqueeze(1)
             x = torch.cat((x, gt_word_embedding), dim=1)
 
             loss_at_idx = F.cross_entropy(
