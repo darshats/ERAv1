@@ -47,20 +47,21 @@ class PhiWrapper(nn.Module):
         self.input_dim_phi2 = input_dim_phi2
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
         self.resblock = SimpleResBlock(self.input_dim_phi2)
-        self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
-        for name, param in self.clip_model.named_parameters():
-            param.requires_grad = False
-        self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
+        ## uncomment below for standalone testing with a PIL and caption
+        # self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
+        # for name, param in self.clip_model.named_parameters():
+        #     param.requires_grad = False
+        # self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
 
-        instruct_part1 = self.phi_tokenizer('Instruction:Caption this image:', return_tensors='pt')
+        instruct_part1 = self.phi_tokenizer('Instruction:Summarize this: ', return_tensors='pt')
         self.instruct_part1_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part1.input_ids.to(device='cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer('Answer:', return_tensors='pt')
+        instruct_part2 = self.phi_tokenizer('. Answer:', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to(device='cuda')
             ).squeeze(0)
@@ -85,7 +86,7 @@ class PhiWrapper(nn.Module):
         )
 
         loss = 0
-        word_output_pred_tokens = torch.empty(batch_size, max_output_len)
+        word_output_pred_tokens = torch.zeros((batch_size, max_output_len), dtype=torch.int32)
         ## greedy loop, get output one token at a time
         for idx in range(max_output_len):
             pred_word = self.frozen_phi.generate(
@@ -108,7 +109,12 @@ class PhiWrapper(nn.Module):
                 break 
             ## feature forcing!, send in next GT to help generation along right track
             ## to stop feature forcing, use embedding of pred_word.sequences[:, 1] instead of gt_word_token
-            gt_word_embedding = self.frozen_phi.get_input_embeddings()(gt_word_token).unsqueeze(1)
+
+            append_token = gt_word_token if idx<=2 else pred_word.sequences[:, 1]
+            # append_token = gt_word_token
+            # append_token = pred_word.sequences[:, 1]
+
+            gt_word_embedding = self.frozen_phi.get_input_embeddings()(append_token).unsqueeze(1)
             x = torch.cat((x, gt_word_embedding), dim=1)
 
             loss_at_idx = F.cross_entropy(

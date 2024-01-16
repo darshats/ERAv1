@@ -25,10 +25,14 @@ if __name__ == "__main__":
 
     
     wandb.login()
-    wandb.init(project="Capstone, part 1", dir='./tmp', id='v1')
+    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v5')
+    ## v3 - lr=1e-5, full feature forcing
+    ## v4 - lr=5e-3, full feature forcing
+    ## v5 - lr=5e-3, part feature forcing, 'summarize this:'<image>'. Answer:'
+    ## v6, same as above, no feature forcing
 
     ## get tokenizer and model ready
-    max_token_len_data = 75
+    max_token_len_data = 128
     wrapper = PhiWrapper(max_token_len_data)
     tokenizer = wrapper.phi_tokenizer
 
@@ -44,16 +48,19 @@ if __name__ == "__main__":
         max_token_len_data
         )
 
-    batch_size_train = 3
+    batch_size_train = 16
     train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True, generator = torch.Generator(device='cuda'))
-    num_batches_train_on = 1500    
+    num_batches_train_on = 4000    
     num_batches_train_on, len(train_dataloader)
 
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=1e-5, eps=1e-9) 
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=5e-3, eps=1e-9) 
     num_epochs = 10
     vocab_size = 51200
 
     wrapper.train()
+    for name, param in wrapper.frozen_phi.named_parameters():
+        param.requires_grad = False
+
     N_batches = len(train_dataloader)
                     
     for epoch in range(num_epochs):
@@ -77,15 +84,15 @@ if __name__ == "__main__":
             # optimizer.zero_grad(set_to_none=True) 
             epoch_loss += loss.item()
 
-            if (iteration % 50) == 0: 
+            if (iteration % 10) == 0: 
                 print(f'Iteration: {iteration}, Loss: {loss.item()}')
                 wandb.log({"loss": loss.item()})
 
                 num_rows = gt.shape[0]
                 batch_preds = word_output_pred_tokens.int()
                 for i in range(num_rows):
-                    gt_text = tokenizer.decode(gt[i])
-                    pred_text = tokenizer.decode(batch_preds[i])
+                    gt_text = tokenizer.decode(gt[i]).replace('<|endoftext|>', '')
+                    pred_text = tokenizer.decode(batch_preds[i]).replace('<|endoftext|>', '')
                 print(f"Batch data {i}: \nCaption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
 
         avg_loss = epoch_loss/(iteration+1) 
