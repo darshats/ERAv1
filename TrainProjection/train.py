@@ -25,11 +25,12 @@ if __name__ == "__main__":
 
     
     wandb.login()
-    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v5')
+    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v7')
     ## v3 - lr=1e-5, full feature forcing
     ## v4 - lr=5e-3, full feature forcing
     ## v5 - lr=5e-3, part feature forcing, 'summarize this:'<image>'. Answer:'
     ## v6, same as above, no feature forcing
+    ## v7, some feature forcing, hack loss prop with each generation
 
     ## get tokenizer and model ready
     max_token_len_data = 128
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     num_batches_train_on = 4000    
     num_batches_train_on, len(train_dataloader)
 
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=5e-3, eps=1e-9) 
+    # optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=5e-3, eps=1e-9) 
     num_epochs = 10
     vocab_size = 51200
 
@@ -71,16 +72,16 @@ if __name__ == "__main__":
                 break 
 
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             
             ## gt is of form (batch, input caption tokenized and padded)
             ## x is clip image embed (batch, 49, 768)
             ## pass through wrapper, get loss from greedy strategy
             loss, word_output_pred_tokens = wrapper(x, gt)
-            loss.requires_grad = True
-            loss.backward()
+            # loss.requires_grad = True
+            # loss.backward()
 
-            optimizer.step() 
+            # optimizer.step() 
             # optimizer.zero_grad(set_to_none=True) 
             epoch_loss += loss.item()
 

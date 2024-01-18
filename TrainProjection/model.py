@@ -85,10 +85,15 @@ class PhiWrapper(nn.Module):
             dim=1
         )
 
+        ##hack try loss prop here itself
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()), lr=5e-3, eps=1e-9) 
+
         loss = 0
         word_output_pred_tokens = torch.zeros((batch_size, max_output_len), dtype=torch.int32)
         ## greedy loop, get output one token at a time
         for idx in range(max_output_len):
+            optimizer.zero_grad()
+
             pred_word = self.frozen_phi.generate(
                 inputs_embeds=x,
                 max_new_tokens = 1, 
@@ -100,7 +105,6 @@ class PhiWrapper(nn.Module):
             )
             pred_word_probs = F.softmax(pred_word.scores[0], dim=-1)
             word_output_pred_tokens[:, idx] = pred_word.sequences[:, 1]
-            vocab_size = pred_word.scores[0].shape[1]
 
             ## get the GT across batch at the idx th position of output
             gt_word_token = caption_tokenized[:,idx]
@@ -110,7 +114,7 @@ class PhiWrapper(nn.Module):
             ## feature forcing!, send in next GT to help generation along right track
             ## to stop feature forcing, use embedding of pred_word.sequences[:, 1] instead of gt_word_token
 
-            append_token = gt_word_token if idx<=2 else pred_word.sequences[:, 1]
+            append_token = gt_word_token if idx<=3 else pred_word.sequences[:, 1]
             # append_token = gt_word_token
             # append_token = pred_word.sequences[:, 1]
 
@@ -123,6 +127,11 @@ class PhiWrapper(nn.Module):
                 ignore_index=self.phi_tokenizer.pad_token_id, 
                 label_smoothing=0.1
                 )
+            
+            loss_at_idx.requires_grad = True
+            loss_at_idx.backward()
+            optimizer.step() 
+
             loss += loss_at_idx
             # print(f'loss at index {idx}: {loss_at_idx}')
             # loss_tosend = loss/batch_size
