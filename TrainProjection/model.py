@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as checkpoint
 from torchvision.transforms import v2
 from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPVisionModel, AutoProcessor, AutoConfig, PhiModel
 from torchinfo import summary
@@ -69,7 +70,7 @@ class PhiWrapper(nn.Module):
 
     def forward(self, x, caption_tokenized):
         x = self.projection_img(x)
-        x = self.resblock(x)
+        x = checkpoint(self.resblock, x)
         batch_size = x.shape[0]
         max_output_len = caption_tokenized.shape[1]
 
