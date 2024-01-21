@@ -56,12 +56,12 @@ class PhiWrapper(nn.Module):
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
 
-        instruct_part1 = self.phi_tokenizer('Instruction:Summarize this: ', return_tensors='pt')
+        instruct_part1 = self.phi_tokenizer('Instruction:Caption image: ', return_tensors='pt')
         self.instruct_part1_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part1.input_ids.to(device='cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer('. Answer:', return_tensors='pt')
+        instruct_part2 = self.phi_tokenizer('\nCaption:', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to(device='cuda')
             ).squeeze(0)
@@ -72,7 +72,6 @@ class PhiWrapper(nn.Module):
         x = self.resblock(x)
         batch_size = x.shape[0]
         max_output_len = caption_tokenized.shape[1]
-        vocab_size = 51200
 
         ## form a vertical vector: bos | instruction part1 | image emb | instruction part2. (b, 60, 2560)
         x = torch.cat(
@@ -85,58 +84,38 @@ class PhiWrapper(nn.Module):
             dim=1
         )
 
-        ##hack try loss prop here itself
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()), lr=5e-3, eps=1e-9) 
-
-        loss = 0
-        word_output_pred_tokens = torch.zeros((batch_size, max_output_len), dtype=torch.int32)
+        pred_logits_all = None
         ## greedy loop, get output one token at a time
         for idx in range(max_output_len):
-            optimizer.zero_grad()
-
-            pred_word = self.frozen_phi.generate(
-                inputs_embeds=x,
-                max_new_tokens = 1, 
-                output_scores=True, 
-                return_dict_in_generate = True, 
-                pad_token_id=self.phi_tokenizer.pad_token_id, 
-                bos_token_id=self.phi_tokenizer.bos_token_id, 
-                eos_token_id=self.phi_tokenizer.eos_token_id
-            )
-            pred_word_probs = F.softmax(pred_word.scores[0], dim=-1)
-            word_output_pred_tokens[:, idx] = pred_word.sequences[:, 1]
-
             ## get the GT across batch at the idx th position of output
-            gt_word_token = caption_tokenized[:,idx]
-            # gt_word_one_hot = torch.nn.functional.one_hot(gt_word_token, vocab_size).to(torch.float32)
-            if sum(torch.eq(torch.tensor([self.phi_tokenizer.pad_token_id]*batch_size), gt_word_token)) == torch.tensor(batch_size): 
+            gt_token = caption_tokenized[:,idx]
+            ## if across the batch we only have pads then break
+            num_pad = sum(torch.eq(torch.tensor([self.phi_tokenizer.pad_token_id]*batch_size), gt_token))
+            if num_pad == torch.tensor(batch_size): 
                 break 
-            ## feature forcing!, send in next GT to help generation along right track
-            ## to stop feature forcing, use embedding of pred_word.sequences[:, 1] instead of gt_word_token
 
-            append_token = gt_word_token if idx<=3 else pred_word.sequences[:, 1]
-            # append_token = gt_word_token
-            # append_token = pred_word.sequences[:, 1]
+            pred = self.frozen_phi.model.layers[0](x)
+            for layer_idx in range(1, 32):
+                pred = self.frozen_phi.model.layers[layer_idx](pred[0])
+            pred = self.frozen_phi.model.final_layernorm(pred[0])
+            pred = self.frozen_phi.lm_head(pred)
+            ## pred contains moving window of output, take last token
+            pred_logits = pred[:,-1,:]
+            pred_token = torch.argmax(pred_logits, dim=-1)
 
-            gt_word_embedding = self.frozen_phi.get_input_embeddings()(append_token).unsqueeze(1)
-            x = torch.cat((x, gt_word_embedding), dim=1)
-
-            loss_at_idx = F.cross_entropy(
-                pred_word_probs, 
-                gt_word_token, 
-                ignore_index=self.phi_tokenizer.pad_token_id, 
-                label_smoothing=0.1
-                )
+            del pred
             
-            loss_at_idx.requires_grad = True
-            loss_at_idx.backward()
-            optimizer.step() 
+            ## feature forcing!, send in next GT to help generation along right track
+            append_token = gt_token if idx<=3 else pred_token
+            gt_word_embedding = self.frozen_phi.get_input_embeddings()(append_token).unsqueeze(1)
+            ## TODO use x[:, 1:, :] for moving window
+            x = torch.cat((x, gt_word_embedding), dim=1)
+            if pred_logits_all is None:
+                pred_logits_all = pred_logits.unsqueeze(1)
+            else:
+                pred_logits_all = torch.cat((pred_logits_all, pred_logits.unsqueeze(1)), dim=1)
 
-            loss += loss_at_idx
-            # print(f'loss at index {idx}: {loss_at_idx}')
-            # loss_tosend = loss/batch_size
-
-        return loss, word_output_pred_tokens
+        return pred_logits_all
 
     def create_attn_mask(self, image_embeds:torch.Tensor, batch_captions:list):
         ## image features is 49,2560
