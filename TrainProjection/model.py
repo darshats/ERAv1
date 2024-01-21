@@ -57,27 +57,27 @@ class PhiWrapper(nn.Module):
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
 
-        instruct_part1 = self.phi_tokenizer('Instruction:Caption image: ', return_tensors='pt')
+        instruct_part1 = self.phi_tokenizer('Image: ', return_tensors='pt')
         self.instruct_part1_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part1.input_ids.to(device='cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer('\nCaption:', return_tensors='pt')
+        instruct_part2 = self.phi_tokenizer('Caption:', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to(device='cuda')
             ).squeeze(0)
         
 
     def forward(self, x, caption_tokenized):
-        x = self.projection_img(x)
+        x = checkpoint(self.projection_img, x)
         x = checkpoint(self.resblock, x)
         batch_size = x.shape[0]
         max_output_len = caption_tokenized.shape[1]
 
-        ## form a vertical vector: bos | instruction part1 | image emb | instruction part2. (b, 60, 2560)
+        ## form a vertical vector: instruction part1 | image emb | instruction part2. (b, 60, 2560)
         x = torch.cat(
             (
-                self.bos_embedding.repeat(batch_size, 1, 1), 
+                # self.bos_embedding.repeat(batch_size, 1, 1), 
                 self.instruct_part1_embedding.repeat(batch_size, 1, 1), 
                 x,
                 self.instruct_part2_embedding.repeat(batch_size, 1, 1)

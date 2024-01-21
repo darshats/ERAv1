@@ -78,24 +78,24 @@ if __name__ == "__main__":
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
             loss = 0
             optimizer.zero_grad()
-            
-            ## gt is of form (batch, input caption tokenized and padded)
-            ## x is clip image embed (batch, 49, 768)
-            ## pass through wrapper, get loss from greedy strategy
-            pred_logits = wrapper(x, gt)   ## (batch, max_predicted_len, vocab_size)
 
-            ## add up losses at each predicted index
-            max_predicted_len = pred_logits.shape[1]
-            for idx in range(max_predicted_len):
-                ## get the GT across batch at the idx th position of output
-                gt_word_token = gt[:,idx]
-                pred_logits_idx = pred_logits[:,idx,:]
-                loss_at_idx = F.cross_entropy(
-                    F.softmax(pred_logits_idx, dim=-1), 
-                    gt_word_token, 
-                    ignore_index=tokenizer.pad_token_id, 
-                    label_smoothing=0.1
-                    )
+            with torch.cuda.amp.autocast():
+                ## gt is of form (batch, input caption tokenized and padded)
+                ## x is clip image embed (batch, 49, 768)
+                ## pass through wrapper, get loss from greedy strategy
+                pred_logits = wrapper(x, gt)   ## (batch, max_predicted_len, vocab_size)
+                ## add up losses at each predicted index
+                max_predicted_len = pred_logits.shape[1]
+                for idx in range(max_predicted_len):
+                    ## get the GT across batch at the idx th position of output
+                    gt_word_token = gt[:,idx]
+                    pred_logits_idx = pred_logits[:,idx,:]
+                    loss_at_idx = F.cross_entropy(
+                        F.softmax(pred_logits_idx, dim=-1), 
+                        gt_word_token, 
+                        ignore_index=tokenizer.pad_token_id, 
+                        label_smoothing=0.1
+                        )
                 loss += loss_at_idx
 
             loss.backward()
