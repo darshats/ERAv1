@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from dataset import COCO_CLIP_Dataset
 from model import PhiWrapper
 
-torch.set_default_device("cuda")
 
 def file_exists(image_id, fpath = './embeddings'): 
     n = '0'*(12-len(str(image_id))) + str(image_id) + '.h5'
@@ -23,7 +22,6 @@ def file_exists(image_id, fpath = './embeddings'):
 
 if __name__ == "__main__":
 
-    
     wandb.login()
     wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v8')
     ## v3 - lr=1e-5, full feature forcing
@@ -48,8 +46,6 @@ if __name__ == "__main__":
 
     # captions_info_df_subset.to_csv('TrainProjection/captions_images_map_COCO_train2017_processed.csv')
     captions_info_df_subset = pd.read_csv('TrainProjection/captions_images_map_COCO_train2017_processed.csv')
-
-
     dataset = COCO_CLIP_Dataset(
         captions_info_df_subset, 
         'embeddings', 
@@ -58,7 +54,7 @@ if __name__ == "__main__":
         )
 
     batch_size_train = 1
-    train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True, generator = torch.Generator(device='cuda'))
+    train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True)
     num_batches_train_on = 4000    
     num_batches_train_on, len(train_dataloader)
 
@@ -76,7 +72,8 @@ if __name__ == "__main__":
         print(f"Epoch: {epoch}")
         epoch_loss = 0
         for iteration, (x, gt) in enumerate(train_dataloader):
-
+            x = x.to('cuda')
+            gt = gt.to('cuda')
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
             optimizer.zero_grad()
 
@@ -84,47 +81,25 @@ if __name__ == "__main__":
                 ## gt is of form (batch, input caption tokenized and padded)
                 ## x is clip image embed (batch, 49, 768)
                 ## pass through wrapper, get loss from greedy strategy
-                pred_logits = wrapper(x, gt)   ## (batch, max_predicted_len, vocab_size)
-                ## add up losses at each predicted index
-                max_predicted_len = pred_logits.shape[1]
-                vocab_size = pred_logits.shape[-1]
-                max_output_len = pred_logits.shape[1]
-
-                gt_one_hot = F.one_hot(gt, vocab_size)
-                # loss = F.cross_entropy(gt_one_hot, pred_logits, ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
-                loss = loss_fn(F.softmax(pred_logits, dim=-1), F.one_hot(gt[:, max_output_len], vocab_size))
-                # for idx in range(max_predicted_len):
-                #     ## get the GT across batch at the idx th position of output
-                #     gt_word_token = gt[:,idx]
-                #     pred_logits_idx = pred_logits[:,idx,:]
-                #     loss_at_idx = F.cross_entropy(
-                #         F.softmax(pred_logits_idx, dim=-1), 
-                #         gt_word_token, 
-                #         ignore_index=tokenizer.pad_token_id, 
-                #         label_smoothing=0.1
-                #         )
-                #     if loss is None:
-                #         loss = loss_at_idx
-                #         loss.requires_grad = True
-                #     else:
-                #         loss =  loss + loss_at_idx
+                outputs = wrapper(x, gt)   ## (batch, max_predicted_len, vocab_size)
             
-            loss.backward()
+            batch_preds = outputs['preds']
+            loss = outputs['loss']
             optimizer.step() 
             # optimizer.zero_grad(set_to_none=True) 
             epoch_loss += loss.detach().item()
+
+            del x
+            del gt
 
             if (iteration % 10) == 0: 
                 print(f'Iteration: {iteration}, Loss: {loss.item()}')
                 wandb.log({"loss": loss.item()})
 
                 num_rows = gt.shape[0]
-                batch_preds = torch.argmax(pred_logits, dim=-1)
                 gt_text = tokenizer.decode(gt[-1]).replace('<|endoftext|>', '')
                 pred_text = tokenizer.decode(batch_preds[-1]).replace('<|endoftext|>', '')
                 print(f"Batch data last row: \nCaption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
-            else:
-                del pred_logits
 
         avg_loss = epoch_loss/(iteration+1) 
         wandb.log({"epoch loss": avg_loss})
