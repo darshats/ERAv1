@@ -47,12 +47,7 @@ class PhiWrapper(nn.Module):
         self.input_dim_CLIP = input_dim_CLIP
         self.input_dim_phi2 = input_dim_phi2
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False)
-        self.resblock = SimpleResBlock(self.input_dim_phi2)
-        ## uncomment below for standalone testing with a PIL and caption
-        # self.clip_model = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
-        # for name, param in self.clip_model.named_parameters():
-        #     param.requires_grad = False
-        # self.clip_processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
+        # self.resblock = SimpleResBlock(self.input_dim_phi2)
 
         self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             torch.tensor(self.phi_tokenizer.bos_token_id).to(device='cuda')).unsqueeze(0)
@@ -69,10 +64,13 @@ class PhiWrapper(nn.Module):
         
 
     def forward(self, x, caption_tokenized):
-        x = checkpoint(self.projection_img, x)
-        x = checkpoint(self.resblock, x)
+        # x = checkpoint(self.projection_img, x, use_reentrant=False)
+        x = self.projection_img(x)
+        # x = checkpoint(self.resblock, x, use_reentrant=False)
+        # x = self.resblock(x)
         batch_size = x.shape[0]
         max_output_len = caption_tokenized.shape[1]
+        max_output_len = 10
 
         ## form a vertical vector: instruction part1 | image emb | instruction part2. (b, 60, 2560)
         x = torch.cat(
@@ -100,9 +98,11 @@ class PhiWrapper(nn.Module):
                 pred = self.frozen_phi.model.layers[layer_idx](pred[0])
             pred = self.frozen_phi.model.final_layernorm(pred[0])
             pred = self.frozen_phi.lm_head(pred)
+            # pred = self.frozen_phi(input_embeds=x)
             ## pred contains moving window of output, take last token
             pred_logits = pred[:,-1,:]
             pred_token = torch.argmax(pred_logits, dim=-1)
+            pred_value = pred_logits[pred_token]
 
             del pred
             

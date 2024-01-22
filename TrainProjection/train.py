@@ -57,7 +57,7 @@ if __name__ == "__main__":
         max_token_len_data
         )
 
-    batch_size_train = 2
+    batch_size_train = 1
     train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True, generator = torch.Generator(device='cuda'))
     num_batches_train_on = 4000    
     num_batches_train_on, len(train_dataloader)
@@ -69,6 +69,8 @@ if __name__ == "__main__":
     wrapper.train()
     for name, param in wrapper.frozen_phi.named_parameters():
         param.requires_grad = False
+
+    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
                     
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch}")
@@ -76,7 +78,6 @@ if __name__ == "__main__":
         for iteration, (x, gt) in enumerate(train_dataloader):
 
             print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
-            loss = 0
             optimizer.zero_grad()
 
             with torch.cuda.amp.autocast():
@@ -86,18 +87,28 @@ if __name__ == "__main__":
                 pred_logits = wrapper(x, gt)   ## (batch, max_predicted_len, vocab_size)
                 ## add up losses at each predicted index
                 max_predicted_len = pred_logits.shape[1]
-                for idx in range(max_predicted_len):
-                    ## get the GT across batch at the idx th position of output
-                    gt_word_token = gt[:,idx]
-                    pred_logits_idx = pred_logits[:,idx,:]
-                    loss_at_idx = F.cross_entropy(
-                        F.softmax(pred_logits_idx, dim=-1), 
-                        gt_word_token, 
-                        ignore_index=tokenizer.pad_token_id, 
-                        label_smoothing=0.1
-                        )
-                loss += loss_at_idx
+                vocab_size = pred_logits.shape[-1]
+                max_output_len = pred_logits.shape[1]
 
+                gt_one_hot = F.one_hot(gt, vocab_size)
+                # loss = F.cross_entropy(gt_one_hot, pred_logits, ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
+                loss = loss_fn(F.softmax(pred_logits, dim=-1), F.one_hot(gt[:, max_output_len], vocab_size))
+                # for idx in range(max_predicted_len):
+                #     ## get the GT across batch at the idx th position of output
+                #     gt_word_token = gt[:,idx]
+                #     pred_logits_idx = pred_logits[:,idx,:]
+                #     loss_at_idx = F.cross_entropy(
+                #         F.softmax(pred_logits_idx, dim=-1), 
+                #         gt_word_token, 
+                #         ignore_index=tokenizer.pad_token_id, 
+                #         label_smoothing=0.1
+                #         )
+                #     if loss is None:
+                #         loss = loss_at_idx
+                #         loss.requires_grad = True
+                #     else:
+                #         loss =  loss + loss_at_idx
+            
             loss.backward()
             optimizer.step() 
             # optimizer.zero_grad(set_to_none=True) 
@@ -109,10 +120,9 @@ if __name__ == "__main__":
 
                 num_rows = gt.shape[0]
                 batch_preds = torch.argmax(pred_logits, dim=-1)
-                for i in range(num_rows):
-                    gt_text = tokenizer.decode(gt[i]).replace('<|endoftext|>', '')
-                    pred_text = tokenizer.decode(batch_preds[i]).replace('<|endoftext|>', '')
-                print(f"Batch data {i}: \nCaption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
+                gt_text = tokenizer.decode(gt[-1]).replace('<|endoftext|>', '')
+                pred_text = tokenizer.decode(batch_preds[-1]).replace('<|endoftext|>', '')
+                print(f"Batch data last row: \nCaption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
             else:
                 del pred_logits
 
