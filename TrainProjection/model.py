@@ -45,7 +45,7 @@ class PhiWrapper(nn.Module):
         self.input_dim_CLIP = input_dim_CLIP
         self.input_dim_phi2 = input_dim_phi2
         self.projection_img = nn.Linear(self.input_dim_CLIP, self.input_dim_phi2, bias=False).to('cuda')
-        # self.resblock = SimpleResBlock(self.input_dim_phi2)
+        self.resblock = SimpleResBlock(self.input_dim_phi2)
 
         # self.bos_embedding  = self.frozen_phi.get_input_embeddings()(
             # torch.tensor(self.phi_tokenizer.bos_token_id)).unsqueeze(0)
@@ -78,64 +78,29 @@ class PhiWrapper(nn.Module):
         return self.image_part
 
         
-    def forward(self, image_embedding, caption_tokenized):
+    def forward(self, image_embedding, current_tokens):
         # x = checkpoint(self.projection_img, x, use_reentrant=False)
-        ## image_embedding is (b, 49, 768)
         image_embedding = self.projection_img(image_embedding) # (b, 49, 2560)
         # x = checkpoint(self.resblock, x, use_reentrant=False)
-        # x = self.resblock(x)
+        image_embedding = self.resblock(image_embedding)
         batch_size = image_embedding.shape[0]
-        max_output_len = caption_tokenized.shape[1]
 
-        current_tokens = None
-        output = None
-        loss = None
-        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.phi_tokenizer.pad_token_id, label_smoothing=0.1)
-        ## greedy loop, get output one token at a time
-        for idx in range(max_output_len):
-            print(f'Processing index {idx}')
-            torch.cuda.empty_cache()
-            ## get the GT across batch at the idx th position of output
-            gt_token = caption_tokenized[:,idx] ## (b)
-            ## if across the batch we only have pads then break
-            num_pad = sum(torch.eq(torch.tensor([self.phi_tokenizer.pad_token_id]*batch_size), gt_token.to('cpu')))
-            if num_pad == torch.tensor(batch_size): 
-                break 
+        x = self.create_input(image_embedding, current_tokens, batch_size) ## (b, 55+, 2560)
+        pred = self.frozen_phi.model.layers[0](x)
+        for layer_idx in range(1, 32):
+            pred = self.frozen_phi.model.layers[layer_idx](pred[0])
+        pred = self.frozen_phi.model.final_layernorm(pred[0])
+        pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
+        ## pred contains moving window of output, take last token
+        pred_logits = pred[:,-1,:]      ## (b, 51200)
+        pred_probs = F.softmax(pred_logits, dim=-1)
 
-            x = self.create_input(image_embedding, current_tokens, batch_size) ## (b, 55+, 2560)
-            pred = self.frozen_phi.model.layers[0](x)
-            for layer_idx in range(1, 32):
-                pred = self.frozen_phi.model.layers[layer_idx](pred[0])
-            pred = self.frozen_phi.model.final_layernorm(pred[0])
-            pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
-            # pred = self.frozen_phi(input_embeds=x)
-            ## pred contains moving window of output, take last token
-            pred_logits = pred[:,-1,:]      ## (b, 51200)
-            pred_probs = F.softmax(pred_logits, dim=-1)
-            pred_token = torch.argmax(pred_probs, dim=-1) ## (b)
+        del x
+        del pred
+        del pred_logits
 
-            loss_at_idx = loss_fn(pred_probs, gt_token)
-            if loss is None:
-                loss = loss_at_idx
-            else:
-                loss = loss + loss_at_idx
+        return pred_probs
 
-            # del x
-            del pred
-            del pred_probs
-            del pred_logits
-            print(torch.cuda.mem_get_info())
-
-            ## feature forcing!, send in next GT to help generation along right track
-            append_token = gt_token if idx<=3 else pred_token
-            current_tokens = append_token.unsqueeze(1) if current_tokens is None else torch.cat((current_tokens, append_token.unsqueeze(1)), dim=1)
-
-            if output is None:
-                output = pred_token.unsqueeze(1)
-            else:
-                output = torch.cat((output, pred_token.unsqueeze(1)), dim=1)
-
-        return {'preds': output, 'loss': loss}
 
     def create_attn_mask(self, image_embeds:torch.Tensor, batch_captions:list):
         ## image features is 49,2560
