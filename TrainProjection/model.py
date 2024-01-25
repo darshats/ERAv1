@@ -55,7 +55,7 @@ class PhiWrapper(nn.Module):
             instruct_part1.input_ids.to('cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer('Caption:', return_tensors='pt')
+        instruct_part2 = self.phi_tokenizer(' Caption:', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to('cuda')
             ).squeeze(0)
@@ -63,19 +63,18 @@ class PhiWrapper(nn.Module):
 
     def create_input(self, image_embedding, token_ids, batch_size):
         ## form a vertical vector: instruction part1 | image emb | instruction part2. (b, 60, 2560)
-        if token_ids is None:
-            self.image_part = torch.cat(
-                (
-                    self.instruct_part1_embedding.repeat(batch_size, 1, 1), 
-                    image_embedding,
-                    self.instruct_part2_embedding.repeat(batch_size, 1, 1)
-                ), 
-                dim=1
-            )
-        else:
+        x = torch.cat(
+            (
+                self.instruct_part1_embedding.repeat(batch_size, 1, 1), 
+                image_embedding,
+                self.instruct_part2_embedding.repeat(batch_size, 1, 1)
+            ), 
+            dim=1
+        )
+        if token_ids is not None:
             token_embedding = self.frozen_phi.get_input_embeddings()(token_ids[:, -1].to('cuda')).unsqueeze(1)
-            self.image_part = torch.cat((self.image_part, token_embedding), dim=1)
-        return self.image_part
+            x = torch.cat((x, token_embedding), dim=1)
+        return x
 
         
     def forward(self, image_embedding, current_tokens):

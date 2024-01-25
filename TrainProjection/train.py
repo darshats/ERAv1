@@ -35,6 +35,8 @@ if __name__ == "__main__":
     ## get tokenizer and model ready
     max_token_len_data = 75
     wrapper = PhiWrapper(max_token_len_data).to(device='cuda')
+    wrapper.projection_img.load_state_dict(torch.load('projection.pth'))
+    wrapper.resblock.load_state_dict(torch.load('resblock.pth'))
     tokenizer = wrapper.phi_tokenizer
 
     ## get data ready
@@ -58,7 +60,7 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True)
     num_batches_train_on = 8000    
 
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=5e-4, eps=1e-9) 
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=1e-5, eps=1e-9) 
     num_epochs = 10
     N_batches = len(train_dataloader)
 
@@ -66,7 +68,7 @@ if __name__ == "__main__":
     for name, param in wrapper.frozen_phi.named_parameters():
         param.requires_grad = False
 
-    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
+    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
                     
     for epoch in range(num_epochs):
         print(f"Epoch: {epoch}")
@@ -74,40 +76,50 @@ if __name__ == "__main__":
         for iteration, (x, gt) in enumerate(train_dataloader):
             x = x.to('cuda')        ### (b, 49, 768)
             gt = gt.to('cuda')      ### (b, 75)
-            print(f"Iteration {iteration}/{num_batches_train_on}", end='\r')
-
             batch_size = x.shape[0] 
             max_output_len = gt.shape[1]
+
+            ## determine the max length of any caption across the batch
+            actual_len = 0
+            for idx in range(max_output_len):
+                ## get the GT across batch at the idx th position of output
+                gt_token = gt[:, idx]
+                ## if across the batch we only have pads then break
+                num_pad = sum(torch.eq(torch.tensor([tokenizer.pad_token_id]*batch_size, device='cuda'), gt_token))
+                if num_pad.detach().item() == batch_size:
+                    break 
+                actual_len += 1
+            print(f"Iteration {iteration}/{num_batches_train_on}, max caption len {actual_len}", end='\r')
+
+            
             batch_preds = None
+            iter_loss = 0
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast():
-                ## gt is of form (batch, input caption tokenized and padded)
-                ## x is clip image embed (batch, 49, 768)
-                ## pass through wrapper, get loss from greedy strategy
-                current_tokens = None
-                for idx in range(max_output_len):
-                    ## get the GT across batch at the idx th position of output
-                    gt_token = gt[:, idx]
-                     ## if across the batch we only have pads then break
-                    num_pad = sum(torch.eq(torch.tensor([tokenizer.pad_token_id]*batch_size, device='cuda'), gt_token))
-                    if num_pad.detach().item() == batch_size:
-                        break 
+            # with torch.cuda.amp.autocast():
+            ## gt is of form (batch, input caption tokenized and padded)
+            ## x is clip image embed (batch, 49, 768)
+            ## pass through wrapper, get loss from greedy strategy
+            current_tokens = None
+            for idx in range(actual_len):
+                ## get the GT across batch at the idx th position of output
+                gt_token = gt[:, idx]
+               
+                pred_probs = wrapper(x, current_tokens)   ### (b, )
+                pred_token = torch.argmax(pred_probs, dim=-1) ### (b, )
+                loss = loss_fn(pred_probs, gt_token)/actual_len
+                loss.backward(retain_graph=True)
+                iter_loss += loss.detach().item()
 
-                    pred_probs = wrapper(x, current_tokens)   ### (b, )
-                    pred_token = torch.argmax(pred_probs, dim=-1) ### (b, )
-                    loss = loss_fn(pred_probs, gt_token)/max_output_len
-                    loss.backward(retain_graph=True)
-
-                    ## feature forcing!, send in next GT to help generation along right track
-                    append_token = gt_token if idx<=3 else pred_token
-                    current_tokens = append_token.unsqueeze(1) if current_tokens is None else torch.cat((current_tokens, append_token.unsqueeze(1)), dim=1)
-                    batch_preds = pred_token.unsqueeze(1) if batch_preds is None else torch.cat((batch_preds, pred_token.unsqueeze(1)), dim=1)
+                ## feature forcing!, send in next GT to help generation along right track
+                append_token = gt_token if idx<=3 else pred_token
+                current_tokens = append_token.unsqueeze(1) if current_tokens is None else torch.cat((current_tokens, append_token.unsqueeze(1)), dim=1)
+                batch_preds = pred_token.unsqueeze(1) if batch_preds is None else torch.cat((batch_preds, pred_token.unsqueeze(1)), dim=1)
                 
             optimizer.step() 
-            epoch_loss += loss.detach().item()
+            epoch_loss += iter_loss
             if (iteration % 10) == 0: 
-                print(f'Iteration: {iteration}, Loss: {loss.item()}')
-                wandb.log({"loss": loss.item()})
+                print(f'Iteration: {iteration}, Loss: {iter_loss}')
+                wandb.log({"step": iteration+3000, "loss": iter_loss})
                 gt_text = tokenizer.decode(gt[-1]).replace('<|endoftext|>', '')
                 pred_text = tokenizer.decode(batch_preds[-1]).replace('<|endoftext|>', '')
                 print(f"Sample Caption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
