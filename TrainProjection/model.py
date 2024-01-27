@@ -85,6 +85,8 @@ class PhiWrapper(nn.Module):
         batch_size = image_embedding.shape[0]
 
         x = self.create_input(image_embedding, current_tokens, batch_size) ## (b, 55+, 2560)
+
+        # pred = self.frozen_phi(inputs_embeds=x)
         pred = self.frozen_phi.model.layers[0](x)
         for layer_idx in range(1, 32):
             pred = self.frozen_phi.model.layers[layer_idx](pred[0])
