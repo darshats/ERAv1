@@ -55,7 +55,7 @@ class PhiWrapper(nn.Module):
             instruct_part1.input_ids.to('cuda')
             ).squeeze(0)
         
-        instruct_part2 = self.phi_tokenizer(' Caption:', return_tensors='pt')
+        instruct_part2 = self.phi_tokenizer(' Caption: ', return_tensors='pt')
         self.instruct_part2_embedding = self.frozen_phi.get_input_embeddings()(
             instruct_part2.input_ids.to('cuda')
             ).squeeze(0)
@@ -92,13 +92,11 @@ class PhiWrapper(nn.Module):
         pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
         ## pred contains moving window of output, take last token
         pred_logits = pred[:,-1,:]      ## (b, 51200)
-        pred_probs = F.softmax(pred_logits, dim=-1)
 
         del x
         del pred
-        del pred_logits
 
-        return pred_probs
+        return pred_logits
 
 
     def create_attn_mask(self, image_embeds:torch.Tensor, batch_captions:list):
