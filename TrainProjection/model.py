@@ -75,28 +75,118 @@ class PhiWrapper(nn.Module):
             token_embedding = self.frozen_phi.get_input_embeddings()(token_ids[:, -1].to('cuda')).unsqueeze(1)
             x = torch.cat((x, token_embedding), dim=1)
         return x
+    
 
+    def create_input2(self, image_embedding, gt, text_len):
+        x = torch.cat(
+            (
+                self.instruct_part1_embedding.unsqueeze(0), 
+                image_embedding,
+                self.instruct_part2_embedding.unsqueeze(0),
+            ), 
+            dim=1
+        )
+        imgpart_len = x.shape[1]
+        pad_len = gt.shape[1]-text_len
+        '''
+        x is like xxxxxxxxxxx (1, imgpart_len)
+        '''
+        x = x.repeat(text_len, 1, 1)
+        '''
+        x is like below (b, imgpart_len)
+        xxxxxxxxxxx
+        xxxxxxxxxxx
+        xxxxxxxxxxx
+        xxxxxxxxxxx
+        '''
+
+        '''
+        gt is like 
+        cccc
         
-    def forward(self, image_embedding, current_tokens):
+        need to generate
+        pppp
+        cppp
+        ccpp
+        cccp
+        '''
+        gt = gt.repeat(text_len, 1)
+        '''
+        cccc
+        cccc
+        cccc
+        cccc
+        '''
+        mid_mask = torch.cat(
+            (1-torch.triu(torch.ones(text_len, text_len), diagonal=0), torch.zeros(text_len, pad_len)),
+            dim=1
+        )
+        '''
+        0000
+        1000
+        1100
+        1110
+        '''
+        gt = gt * mid_mask.to('cuda').int()
+        '''
+        0000
+        c000
+        cc00
+        ccc0
+        '''
+        gt = gt.masked_fill(gt==0, self.phi_tokenizer.pad_token_id)
+        '''
+        pppp
+        cppp
+        ccpp
+        cccp
+        '''
+        ## convert to embedding
+        x = torch.cat((x, self.frozen_phi.get_input_embeddings()(gt)), dim=1)
+        '''
+        attn mask as below
+        11111111111|0000|000
+        11111111111|1000|000
+        11111111111|1100|000
+        11111111111|1110|000
+
+        x*attn_mask.masked_fill(x==0, p) like below each predicts one word of caption
+        xxxxxxxxxxx0000000
+        xxxxxxxxxxxc000000
+        xxxxxxxxxxxcc00000
+        xxxxxxxxxxxccc0000 
+
+        leftmask|midmask|rightmask
+        '''
+        left_mask = torch.ones((text_len, imgpart_len))
+        right_mask = torch.zeros((text_len, pad_len))
+        attn_mask = torch.cat((left_mask, mid_mask, right_mask), dim=1)
+
+        return x, attn_mask.to('cuda')
+    
+        
+    def forward(self, image_embedding, gt, caption_len):
         # x = checkpoint(self.projection_img, x, use_reentrant=False)
         image_embedding = self.projection_img(image_embedding) # (b, 49, 2560)
         # x = checkpoint(self.resblock, x, use_reentrant=False)
         image_embedding = self.resblock(image_embedding)
         batch_size = image_embedding.shape[0]
 
-        x = self.create_input(image_embedding, current_tokens, batch_size) ## (b, 55+, 2560)
+        x, attn_mask = self.create_input2(image_embedding, gt, caption_len) ## (b, 55+, 2560)
 
-        # pred = self.frozen_phi(inputs_embeds=x)
-        pred = self.frozen_phi.model.layers[0](x)
-        for layer_idx in range(1, 32):
-            pred = self.frozen_phi.model.layers[layer_idx](pred[0])
-        pred = self.frozen_phi.model.final_layernorm(pred[0])
-        pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
+        pred = self.frozen_phi(inputs_embeds=x, attention_mask=attn_mask)
+
+        # pred = self.frozen_phi.model.layers[0](x)
+        # for layer_idx in range(1, 32):
+        #     pred = self.frozen_phi.model.layers[layer_idx](pred[0])
+        # pred = self.frozen_phi.model.final_layernorm(pred[0])
+        # pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
         ## pred contains moving window of output, take last token
-        pred_logits = pred[:,-1,:]      ## (b, 51200)
+        pred_logits = pred.logits[:,-1,:]      ## (b, 51200)
 
         del x
         del pred
+        del attn_mask
 
         return pred_logits
 

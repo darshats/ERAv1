@@ -22,7 +22,7 @@ def file_exists(image_id, fpath = './embeddings'):
     
 
 def get_max_token_length(gt):
-    token_len = 0
+    token_len = 1
     for idx in range(max_output_len):
         ## get the GT across batch at the idx th position of output
         gt_token = gt[:, idx]
@@ -30,14 +30,15 @@ def get_max_token_length(gt):
         num_pad = sum(torch.eq(torch.tensor([tokenizer.pad_token_id]*batch_size, device='cuda'), gt_token))
         if num_pad.detach().item() == batch_size:
             break 
+
         token_len += 1
     return token_len
 
 
 if __name__ == "__main__":
-
+    ver = 'v14'
     wandb.login()
-    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id='v13')
+    wandb_run = wandb.init(project="Capstone, part 1", dir='./tmp', id=ver)
     ## v3 - lr=1e-5, full feature forcing
     ## v4 - lr=5e-3, full feature forcing
     ## v5 - lr=5e-3, part feature forcing, 'summarize this:'<image>'. Answer:'
@@ -47,12 +48,13 @@ if __name__ == "__main__":
     ## v9, refactored loss loop completely
     ## v10-11, loss addition instead of backward on each minibatch
     ## v13 softmax of logits instead of probs
+    ## v14 attention masks and single caption batch with incremental output prediction
 
     ## get tokenizer and model ready
-    max_token_len_data = 75
-    ver = 'v13'
+    max_token_len_data = 0
+    
     wrapper = PhiWrapper(max_token_len_data).to(device='cuda')
-    if os.path.exists(f'projection_{ver}.pth'):
+    if os.path.exists(f'projection_{ver}.pth') and os.path.exists(f'resblock_{ver}.pth'):
         wrapper.projection_img.load_state_dict(torch.load(f'projection_{ver}.pth'))
         wrapper.resblock.load_state_dict(torch.load(f'resblock_{ver}.pth'))
     tokenizer = wrapper.phi_tokenizer
@@ -75,9 +77,9 @@ if __name__ == "__main__":
         max_token_len_data
         )
 
-    batch_size_train = 8
+    batch_size_train = 1
     train_dataloader = DataLoader(dataset, batch_size=batch_size_train, shuffle=True)
-    num_batches_train_on = 8000    
+    num_batches_train_on = 64000    
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, wrapper.parameters()), lr=1e-5, eps=1e-9) 
     num_epochs = 10
     N_batches = len(train_dataloader)
@@ -100,35 +102,23 @@ if __name__ == "__main__":
             ## determine the max length of any caption across the batch
             actual_len = get_max_token_length(gt)
             print(f"Iteration {iteration}/{num_batches_train_on}, max caption len {actual_len}", end='\r')
-            
-            batch_preds = None
-            iter_loss = 0
-            optimizer.zero_grad()
-            current_tokens = None
-            # with torch.cuda.amp.autocast():
-            for idx in range(actual_len):
-                ## get the GT across batch at the idx th position of output
-                gt_token = gt[:, idx]
-            
-                pred_logits = wrapper(x, current_tokens)   ### (b, )
-                pred_token = torch.argmax(pred_logits, dim=-1) ### (b, )
-                loss = loss_fn(pred_logits, gt_token)/actual_len
-                loss.backward(retain_graph=True)
-                iter_loss += loss.detach().item()
 
-                ## feature forcing!, send in next GT to help generation along right track
-                append_token = gt_token if idx<=3 else pred_token
-                current_tokens = append_token.unsqueeze(1) if current_tokens is None else torch.cat((current_tokens, append_token.unsqueeze(1)), dim=1)
-                batch_preds = pred_token.unsqueeze(1) if batch_preds is None else torch.cat((batch_preds, pred_token.unsqueeze(1)), dim=1)
-                
+            pred_logits = wrapper(x, gt, actual_len)
+            pred_tokens = torch.argmax(pred_logits, dim=-1) ### (b, )
+            loss=0
+            for i in range(actual_len):
+                loss += loss_fn(pred_logits[i], gt.squeeze()[i])/actual_len
+            loss.backward(retain_graph=True)
+
             optimizer.step() 
-            epoch_loss += iter_loss
+            epoch_loss += loss.detach().item()
+            optimizer.zero_grad()
             if (iteration % 10) == 0: 
-                print(f'Iteration: {iteration}, Loss: {iter_loss}')
-                wandb.log({"step": iteration+3000, "loss": iter_loss})
+                print(f'Iteration: {iteration}, Loss: {loss.detach().item()}')
+                wandb.log({"step": iteration, "loss": loss.detach().item()})
                 gt_text = tokenizer.decode(gt[-1]).replace('<|endoftext|>', '')
-                pred_text = tokenizer.decode(batch_preds[-1]).replace('<|endoftext|>', '')
-                print(f"Sample Caption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
+                # pred_text = tokenizer.decode(pred_tokens[-1]).replace('<|endoftext|>', '')
+                # print(f"Sample Caption (gt): {gt_text}\nCaption (pred): {pred_text}\n")
 
             del x
             del gt

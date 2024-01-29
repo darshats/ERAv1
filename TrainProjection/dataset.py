@@ -24,16 +24,15 @@ class COCO_CLIP_Dataset(Dataset):
 
         clip_embed = h5py.File(img_clip_embedding_path,'r+')['image_features'][()]
         
-        img_caption = row['caption'].values[0] ## Tokenize this 
-        img_caption_tokenized = self.tokenizer(img_caption, return_tensors="pt", 
-                                               return_attention_mask=False).input_ids
-        input_tokenized = torch.cat((img_caption_tokenized, 
-                               torch.tensor(self.tokenizer.eos_token_id).view((1,1))), dim=1)
-        
-        if (self.max_token_len_data - input_tokenized.shape[1]) > 0: 
-            pad_tokenized = torch.tensor([self.tokenizer.pad_token_id]*(self.max_token_len_data - input_tokenized.shape[1])).unsqueeze(0)
+        img_caption = row['caption'].values[0] 
+        img_caption_tokenized = self.tokenizer(img_caption, return_tensors="pt", return_attention_mask=False).input_ids
+        input_tokenized = torch.cat((img_caption_tokenized, torch.tensor(self.tokenizer.eos_token_id).view((1,1))), dim=1)
+
+        pad_len = self.max_token_len_data - input_tokenized.shape[1]
+        if (pad_len) > 0: 
+            pad_tokenized = torch.tensor([self.tokenizer.pad_token_id]*pad_len).unsqueeze(0)
             input_final =  torch.cat((input_tokenized, pad_tokenized), dim=1)
         else: 
             input_final = input_tokenized
-        
+       
         return torch.tensor(clip_embed).squeeze(0), input_final.squeeze(0)
