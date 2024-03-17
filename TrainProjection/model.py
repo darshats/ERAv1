@@ -118,7 +118,7 @@ class PhiWrapper(nn.Module):
         cccc
         '''
         mid_mask = torch.cat(
-            (1-torch.triu(torch.ones(text_len, text_len), diagonal=0), torch.zeros(text_len, pad_len)),
+            (1-torch.triu(torch.ones(text_len, text_len), diagonal=0), torch.zeros(text_len, pad_len)), ##TODO no-op second param
             dim=1
         )
         '''
@@ -159,7 +159,7 @@ class PhiWrapper(nn.Module):
         leftmask|midmask|rightmask
         '''
         left_mask = torch.ones((text_len, imgpart_len))
-        right_mask = torch.zeros((text_len, pad_len))
+        right_mask = torch.zeros((text_len, pad_len)) ## TODO no-op
         attn_mask = torch.cat((left_mask, mid_mask, right_mask), dim=1)
 
         return x, attn_mask.to('cuda')
@@ -173,15 +173,7 @@ class PhiWrapper(nn.Module):
         batch_size = image_embedding.shape[0]
 
         x, attn_mask = self.create_input2(image_embedding, gt, caption_len) ## (b, 55+, 2560)
-
         pred = self.frozen_phi(inputs_embeds=x, attention_mask=attn_mask)
-
-        # pred = self.frozen_phi.model.layers[0](x)
-        # for layer_idx in range(1, 32):
-        #     pred = self.frozen_phi.model.layers[layer_idx](pred[0])
-        # pred = self.frozen_phi.model.final_layernorm(pred[0])
-        # pred = self.frozen_phi.lm_head(pred)  ## (b, 55, 51200)
-        ## pred contains moving window of output, take last token
         pred_logits = pred.logits[:,-1,:]      ## (b, 51200)
 
         del x
