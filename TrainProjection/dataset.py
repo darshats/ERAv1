@@ -21,6 +21,7 @@ class COCO_CLIP_Dataset(Dataset):
         img_base_name = '0'*(12-len(str(df_img))) + str(df_img)
         img_base_name = img_base_name.replace(' ', '0')
         img_clip_embedding_path = os.path.join(self.embedding_path, f'{img_base_name}.h5')
+        imgpath = f'/mnt/d/train2017/{img_base_name}.jpg'
 
         clip_embed = h5py.File(img_clip_embedding_path,'r+')['image_features'][()]
         
@@ -35,4 +36,4 @@ class COCO_CLIP_Dataset(Dataset):
         else: 
             input_final = input_tokenized
        
-        return torch.tensor(clip_embed).squeeze(0), input_final.squeeze(0)
+        return torch.tensor(clip_embed).squeeze(0), input_final.squeeze(0), imgpath
